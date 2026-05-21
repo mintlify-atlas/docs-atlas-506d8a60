@@ -1,0 +1,179 @@
+---
+title: "GitHub Actions CI/CD pipeline for Innovatech Chile"
+description: "Automated pipeline triggered on push to main that builds three Docker images, pushes them to ECR, and redeploys containers on EC2 via AWS SSM."
+---
+
+Every push to the `main` branch triggers a two-job GitHub Actions workflow: the first job builds Docker images for all three services and pushes them to Amazon ECR; the second job connects to the running EC2 instances through AWS Systems Manager and restarts each container with the new image. No SSH keys or open inbound ports are required for the deployment step.
+
+## Workflow overview
+
+The workflow is defined in `.github/workflows/deploy.yml` and runs on `ubuntu-latest` runners.
+
+| Job | Depends on | Purpose |
+|---|---|---|
+| `build-and-push` | — | Build all three images and push to ECR |
+| `deploy-by-ssm` | `build-and-push` | Pull and restart containers on EC2 via SSM |
+
+## Environment variables
+
+The following variables are set at the workflow level and shared across both jobs.
+
+| Variable | Value |
+|---|---|
+| `AWS_REGION` | `us-east-1` |
+| `AWS_ACCOUNT_ID` | `118812498736` |
+| `ECR_REGISTRY` | `118812498736.dkr.ecr.us-east-1.amazonaws.com` |
+| `REPO_FRONTEND` | `tienda-frontend` |
+| `REPO_BACKEND` | `tienda-backend` |
+| `REPO_DESPACHOS` | `tienda-backend-despachos` |
+
+## Required GitHub secrets
+
+Configure these three secrets in **Settings → Secrets and variables → Actions** before running the workflow.
+
+| Secret | Description |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | AWS access key for the deployment IAM user |
+| `AWS_SECRET_ACCESS_KEY` | Corresponding secret access key |
+| `AWS_SESSION_TOKEN` | Session token required for AWS Academy temporary credentials |
+
+<Warning>
+  AWS Academy credentials expire after a few hours. You must update `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` in GitHub secrets before each deployment session.
+</Warning>
+
+## Job 1: build and push
+
+This job checks out the repository, authenticates with AWS and ECR, then builds and pushes one image per service.
+
+<Steps>
+  <Step title="Checkout code">
+    Uses `actions/checkout@v4` to clone the repository into the runner.
+  </Step>
+  <Step title="Configure AWS credentials">
+    Uses `aws-actions/configure-aws-credentials@v2` with the three secrets. The `aws-session-token` input is required for AWS Academy accounts.
+  </Step>
+  <Step title="Log in to Amazon ECR">
+    Uses `aws-actions/amazon-ecr-login@v2` to authenticate Docker with the private registry.
+  </Step>
+  <Step title="Build and push all three images">
+    Runs `docker build` and `docker push` for `tienda-frontend`, `tienda-backend`, and `tienda-backend-despachos`, each tagged `:latest`.
+  </Step>
+</Steps>
+
+## Job 2: deploy via SSM
+
+After `build-and-push` completes, this job sends `AWS-RunShellScript` commands to EC2 instances by their `Name` tag. No inbound SSH port needs to be open.
+
+- **ec2-web** — authenticates with ECR, pulls `tienda-frontend:latest`, removes the old container, and starts a new one on port `80`.
+- **ec2-app** — authenticates with ECR, pulls both `tienda-backend:latest` and `tienda-backend-despachos:latest`, removes the old containers, and starts new ones on ports `3001` and `3002`.
+
+<Note>
+  SSM `send-command` is fire-and-forget — the workflow step returns as soon as the command is queued. Check the **AWS Systems Manager → Run Command** console to monitor execution progress and view output logs.
+</Note>
+
+## Full workflow file
+
+```yaml .github/workflows/deploy.yml
+name: Deploy to Amazon ECS Instances (Innovatech)
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "118812498736"
+  ECR_REGISTRY: "118812498736.dkr.ecr.us-east-1.amazonaws.com"
+  
+  # Repositorios ECR reales de tu proyecto
+  REPO_FRONTEND: tienda-frontend
+  REPO_BACKEND: tienda-backend
+  REPO_DESPACHOS: tienda-backend-despachos
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }} # Crucial para AWS Academy
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    # 1. COMPILAR Y SUBIR FRONTEND (Buscando el Dockerfile en su carpeta correspondiente)
+    - name: Build and Push Frontend
+      run: |
+        docker build -t ${{ env.ECR_REGISTRY }}/${{ env.REPO_FRONTEND }}:latest -f proyect/frontend/Dockerfile ./proyect/frontend
+        docker push ${{ env.ECR_REGISTRY }}/${{ env.REPO_FRONTEND }}:latest
+
+    # 2. COMPILAR Y SUBIR BACKEND VENTAS
+    - name: Build and Push Backend
+      run: |
+        docker build -t ${{ env.ECR_REGISTRY }}/${{ env.REPO_BACKEND }}:latest -f proyect/backend/Dockerfile ./proyect/backend
+        docker push ${{ env.ECR_REGISTRY }}/${{ env.REPO_BACKEND }}:latest
+
+    # 3. COMPILAR Y SUBIR BACKEND DESPACHOS
+    - name: Build and Push Backend Despachos
+      run: |
+        docker build -t ${{ env.ECR_REGISTRY }}/${{ env.REPO_DESPACHOS }}:latest -f proyect/backend-despachos/Dockerfile ./proyect/backend-despachos
+        docker push ${{ env.ECR_REGISTRY }}/${{ env.REPO_DESPACHOS }}:latest
+
+  deploy-by-ssm:
+    name: Update Instances via SSM
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    # Orden remota a la máquina ec2-web para actualizar el Frontend
+    - name: Refresh Frontend Container on ec2-web
+      run: |
+        aws ssm send-command \
+          --document-name "AWS-RunShellScript" \
+          --targets "Key=tag:Name,Values=ec2-web" \
+          --comment "Update frontend container" \
+          --parameters 'commands=[
+            "aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin '${{ env.ECR_REGISTRY }}'",
+            "sudo docker pull '${{ env.ECR_REGISTRY }}'/'${{ env.REPO_FRONTEND }}':latest",
+            "sudo docker rm -f tienda-frontend || true",
+            "sudo docker run -d --name tienda-frontend --restart always -p 80:80 '${{ env.ECR_REGISTRY }}'/'${{ env.REPO_FRONTEND }}':latest"
+          ]'
+
+    # Orden remota a la máquina ec2-app para actualizar ambos Backends
+    - name: Refresh Backend Containers on ec2-app
+      run: |
+        aws ssm send-command \
+          --document-name "AWS-RunShellScript" \
+          --targets "Key=tag:Name,Values=ec2-app" \
+          --comment "Update backend containers" \
+          --parameters 'commands=[
+            "aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin '${{ env.ECR_REGISTRY }}'",
+            "sudo docker pull '${{ env.ECR_REGISTRY }}'/'${{ env.REPO_BACKEND }}':latest",
+            "sudo docker pull '${{ env.ECR_REGISTRY }}'/'${{ env.REPO_DESPACHOS }}':latest",
+            "sudo docker rm -f tienda-backend || true",
+            "sudo docker rm -f tienda-backend-despachos || true",
+            "sudo docker run -d --name tienda-backend --restart always -p 3001:3001 '${{ env.ECR_REGISTRY }}'/'${{ env.REPO_BACKEND }}':latest",
+            "sudo docker run -d --name tienda-backend-despachos --restart always -p 3002:3002 '${{ env.ECR_REGISTRY }}'/'${{ env.REPO_DESPACHOS }}':latest"
+          ]'
+```

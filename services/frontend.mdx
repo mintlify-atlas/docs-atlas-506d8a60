@@ -1,0 +1,159 @@
+---
+title: "Frontend: React 18 admin dashboard served by NGINX"
+description: "Vite/React 18 admin dashboard served by NGINX on port 80, connecting to both Spring Boot APIs to manage sales and dispatch records for Tienda de Perritos."
+---
+
+The frontend is a React 18 single-page application built with Vite that provides the admin interface for Tienda de Perritos. It communicates with both the Ventas API and the Despachos API over HTTP, and is served as compiled static assets by NGINX inside Docker on port 80.
+
+<CardGroup cols={2}>
+  <Card title="Ventas API" icon="cart-shopping" href="/services/ventas-api">
+    Sales microservice the frontend reads and writes via Axios
+  </Card>
+  <Card title="Despachos API" icon="truck" href="/services/despachos-api">
+    Dispatch microservice the frontend reads and writes via Axios
+  </Card>
+</CardGroup>
+
+## Overview
+
+<CardGroup cols={2}>
+  <Card title="Port" icon="network-wired">
+    `80` (NGINX in Docker)
+  </Card>
+  <Card title="Framework" icon="react">
+    React 18 + Vite 5
+  </Card>
+  <Card title="Styling" icon="paintbrush">
+    Tailwind CSS 3
+  </Card>
+  <Card title="Routing" icon="route">
+    React Router v6
+  </Card>
+</CardGroup>
+
+## Technology stack
+
+The application is assembled from the following packages, as declared in `package.json`:
+
+| Package | Version | Purpose |
+|---|---|---|
+| `react` | `^18.2.0` | UI component framework |
+| `react-dom` | `^18.2.0` | DOM renderer |
+| `react-router-dom` | `^6.24.1` | Client-side routing |
+| `axios` | `^1.6.8` | HTTP client for API requests |
+| `react-hook-form` | `^7.52.1` | Form state management and validation |
+| `sweetalert2` | `^11.11.0` | Modal dialogs and confirmation prompts |
+| `react-icons` | `^5.1.0` | Icon library |
+| `tailwindcss` | `^3.4.3` | Utility-first CSS framework |
+| `vite` | `^5.2.0` | Build tool and dev server |
+
+## Component structure
+
+The application organises its UI into two groups under `src/componentes/`:
+
+```
+src/componentes/
+├── CrudAdmin/
+│   ├── CardComponent.jsx       # Summary stat cards
+│   ├── FormCierreDespacho.jsx  # Form to close/complete a dispatch
+│   ├── FormDespacho.jsx        # Form to create a new dispatch
+│   ├── Modal.jsx               # Reusable modal wrapper
+│   ├── PruebaCards.jsx         # Card layout test/demo
+│   ├── SearchBar.jsx           # Search input component
+│   ├── TableCompras.jsx        # Sales data table
+│   └── TableDespachos.jsx      # Dispatches data table
+├── CrudAdmin.jsx               # Main admin view
+└── Layouts/
+    ├── Carrusel.jsx            # Image carousel
+    ├── Footer.jsx              # Page footer
+    ├── Navbar.jsx              # Navigation bar
+    └── Reviews.jsx             # Reviews section
+```
+
+## Environment variables
+
+Two environment variables configure the API base URLs. Vite exposes only variables prefixed with `VITE_` to the browser bundle.
+
+| Variable | Example value | Description |
+|---|---|---|
+| `VITE_API_BASE_URL` | `http://backend:3001` | Base URL for the Ventas API |
+| `VITE_API_DESPACHOS_URL` | `http://backend-despachos:3002` | Base URL for the Despachos API |
+
+<Note>
+  In Docker Compose, the values use the service hostnames (`backend`, `backend-despachos`). For local development outside Docker, point these variables to `http://localhost:3001` and `http://localhost:3002` in a `.env.local` file.
+</Note>
+
+```yaml docker-compose.yml (frontend service)
+frontend:
+  build:
+    context: ./front_despacho
+  ports:
+    - "80:80"
+  environment:
+    VITE_API_BASE_URL: http://backend:3001
+    VITE_API_DESPACHOS_URL: http://backend-despachos:3002
+  depends_on:
+    - backend
+    - backend-despachos
+```
+
+## Docker build
+
+The frontend uses a two-stage build: Node compiles the assets, then NGINX serves the resulting `dist/` folder.
+
+```dockerfile Dockerfile
+# Stage 1 — build
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# Stage 2 — serve
+FROM nginx:stable-alpine AS runtime
+COPY --from=builder /app/dist /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+<Steps>
+  <Step title="Builder stage">
+    `node:20-alpine` installs exact dependency versions with `npm ci`, then runs `vite build` to compile TypeScript/JSX and bundle assets into `dist/`.
+  </Step>
+  <Step title="Runtime stage">
+    `nginx:stable-alpine` copies the compiled `dist/` folder into NGINX's default web root at `/usr/share/nginx/html` and serves it on port 80.
+  </Step>
+</Steps>
+
+## Local development
+
+To run the frontend outside Docker with hot-module replacement:
+
+<Steps>
+  <Step title="Install dependencies">
+    ```bash
+    cd proyect/front_despacho
+    npm install
+    ```
+  </Step>
+  <Step title="Set API URLs">
+    Create a `.env.local` file to point at locally running API instances:
+
+    ```bash .env.local
+    VITE_API_BASE_URL=http://localhost:3001
+    VITE_API_DESPACHOS_URL=http://localhost:3002
+    ```
+  </Step>
+  <Step title="Start the dev server">
+    ```bash
+    npm run dev
+    ```
+
+    Vite starts a dev server with HMR at `http://localhost:5173` by default.
+  </Step>
+</Steps>
+
+<Tip>
+  Run the two Spring Boot APIs first (or start them with `docker compose up backend backend-despachos db -d`) so the frontend has live data to work with during development.
+</Tip>

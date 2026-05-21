@@ -1,0 +1,96 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Innovatech Chile - Tienda de Perritos",
+  "projectDescription": "A containerized full-stack e-commerce platform for Innovatech Chile, comprising two Spring Boot microservices (Sales and Dispatch), a React/Vite frontend, MySQL database, and AWS infrastructure provisioned via Terraform with a GitHub Actions CI/CD pipeline.",
+  "theme": "aspen",
+  "primaryColor": "#2563EB",
+  "lightColor": "#DBEAFE",
+  "darkColor": "#1E3A5F",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "introduction",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Getting Started",
+            "pages": [
+              "getting-started/prerequisites",
+              "getting-started/local-development"
+            ]
+          },
+          {
+            "group": "Services",
+            "pages": [
+              "services/ventas-api",
+              "services/despachos-api",
+              "services/frontend"
+            ]
+          },
+          {
+            "group": "Infrastructure",
+            "pages": [
+              "infrastructure/terraform",
+              "infrastructure/docker",
+              "infrastructure/aws-ecr"
+            ]
+          },
+          {
+            "group": "CI/CD & Deployment",
+            "pages": [
+              "cicd/pipeline",
+              "cicd/deployment",
+              "cicd/scripts"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Ventas API",
+            "pages": [
+              "api/ventas/overview",
+              "api/ventas/endpoints"
+            ]
+          },
+          {
+            "group": "Despachos API",
+            "pages": [
+              "api/despachos/overview",
+              "api/despachos/endpoints"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Dual Spring Boot microservices for Sales (port 3001) and Dispatch (port 3002)",
+    "React + Vite frontend served via NGINX in Docker",
+    "MySQL 8.0 database with named volume for data persistence",
+    "Multi-stage Dockerfiles for optimized container images",
+    "Terraform-provisioned 3-tier AWS VPC (web, app, data layers) across two Availability Zones",
+    "GitHub Actions CI/CD pipeline that builds, pushes to Amazon ECR, and deploys via AWS SSM",
+    "Security group chaining enforcing strict web → app → data traffic flow"
+  ],
+  "publicApiSurface": [
+    "POST /api/v1/ventas — Create a new sale",
+    "GET /api/v1/ventas — List all sales",
+    "GET /api/v1/ventas/{idVenta} — Get sale by ID",
+    "PUT /api/v1/ventas/{idVenta} — Update a sale",
+    "DELETE /api/v1/ventas/{idVenta} — Delete a sale",
+    "POST /api/v1/despachos — Create a new dispatch",
+    "GET /api/v1/despachos — List all dispatches",
+    "GET /api/v1/despachos/{idDespacho} — Get dispatch by ID",
+    "PUT /api/v1/despachos/{idDespacho} — Update a dispatch",
+    "DELETE /api/v1/despachos/{idDespacho} — Delete a dispatch"
+  ]
+}

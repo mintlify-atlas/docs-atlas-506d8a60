@@ -1,0 +1,94 @@
+---
+title: "Run the Innovatech stack locally with Docker Compose"
+description: "Clone the repo, export AWS_ACCOUNT_ID, and start all four services — Ventas API, Despachos API, frontend, and MySQL — with a single docker compose command."
+---
+
+Docker Compose orchestrates the entire Innovatech Chile stack — the Ventas API, Despachos API, React frontend, and MySQL database — from a single `docker-compose.yml` file in the `proyect/` directory. The steps below take you from a fresh clone to a running local environment.
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/DevOpsDuoc/Evaluacion02_Devop_Innovatech.git
+    cd Evaluacion02_Devop_Innovatech/proyect
+    ```
+  </Step>
+
+  <Step title="Set the required environment variable">
+    `docker-compose.yml` uses `AWS_ACCOUNT_ID` to tag images. Export it before running any Compose commands.
+
+    ```bash
+    export AWS_ACCOUNT_ID=123456789012
+    ```
+
+    Replace `123456789012` with your actual 12-digit AWS account ID.
+  </Step>
+
+  <Step title="Start all services">
+    Run the following from the `proyect/` directory:
+
+    ```bash
+    docker compose up -d
+    ```
+
+    Docker builds the `backend` and `frontend` images from their local Dockerfiles on the first run, then starts all four containers in detached mode.
+  </Step>
+
+  <Step title="Verify the services are running">
+    ```bash
+    docker compose ps
+    ```
+
+    All four services — `frontend`, `backend`, `backend-despachos`, and `db` — should show a status of `running`.
+  </Step>
+</Steps>
+
+## Service URLs
+
+Once all containers are up, the services are available at:
+
+| Service | URL |
+|---|---|
+| Frontend | `http://localhost` |
+| Ventas API | `http://localhost:3001` |
+| Despachos API | `http://localhost:3002` |
+| MySQL | `localhost:3306` |
+
+## Environment variables in docker-compose.yml
+
+The backend services receive their database connection settings as environment variables injected by Compose. No manual configuration is required for local development — these values are already set in `docker-compose.yml`:
+
+```yaml
+environment:
+  SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/tienda
+  SPRING_DATASOURCE_USERNAME: tienda
+  SPRING_DATASOURCE_PASSWORD: tienda123
+  SPRING_JPA_HIBERNATE_DDL_AUTO: update
+```
+
+`SPRING_JPA_HIBERNATE_DDL_AUTO: update` tells Hibernate to automatically create or update the database schema on startup. This is safe for local development; use a migration tool like Flyway in production.
+
+## Viewing logs
+
+To stream logs from all services:
+
+```bash
+docker compose logs -f
+```
+
+To follow logs from a single service only:
+
+```bash
+docker compose logs -f backend
+```
+
+## Stopping the stack
+
+```bash
+docker compose down
+```
+
+This stops and removes the containers. The `tienda_db_data` named volume is preserved, so your MySQL data survives the shutdown.
+
+<Note>
+  MySQL data is stored in a Docker named volume called `tienda_db_data`. Because Docker manages the volume independently from the containers, your database persists across `docker compose down` and `docker compose up` cycles. To reset the database to a clean state, remove the volume explicitly with `docker compose down -v`.
+</Note>

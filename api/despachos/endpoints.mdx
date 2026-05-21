@@ -1,0 +1,317 @@
+---
+title: 'Despachos API: POST, GET, PUT, DELETE /api/v1/despachos'
+description: 'Complete reference for all five Despachos API endpoints: create, list, get, update, and delete dispatch records in the Innovatech Chile store.'
+---
+
+The Despachos API exposes five endpoints for managing dispatch records. All endpoints are served under the base path `/api/v1/despachos`. See the [overview page](/api/despachos/overview) for base URLs, the data model, and error handling.
+
+---
+
+## POST /api/v1/despachos
+
+Creates a new dispatch record. Returns `201 Created` with the created object and a `Location` header pointing to the new resource.
+
+### Body parameters
+
+<ParamField body="fechaDespacho" type="string">
+  Dispatch date in ISO-8601 format (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField body="patenteCamion" type="string">
+  Truck license plate assigned to carry out the delivery.
+</ParamField>
+
+<ParamField body="intento" type="int">
+  Delivery attempt number.
+</ParamField>
+
+<ParamField body="idCompra" type="Long">
+  ID of the associated sale (`Venta`) that originated this dispatch.
+</ParamField>
+
+<ParamField body="direccionCompra" type="string">
+  Delivery address, copied from the associated sale.
+</ParamField>
+
+<ParamField body="valorCompra" type="Long">
+  Purchase value, copied from the associated sale.
+</ParamField>
+
+<ParamField body="despachado" type="boolean" default="false">
+  Whether the delivery has been completed. Defaults to `false`.
+</ParamField>
+
+### Example
+
+<CodeGroup>
+
+```bash curl
+curl --request POST \
+  --url http://localhost:3002/api/v1/despachos \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "fechaDespacho": "2024-03-16",
+    "patenteCamion": "BCDF12",
+    "intento": 1,
+    "idCompra": 1,
+    "direccionCompra": "Av. Providencia 1234, Santiago",
+    "valorCompra": 45000,
+    "despachado": false
+  }'
+```
+
+</CodeGroup>
+
+**Request body**
+
+```json
+{
+  "fechaDespacho": "2024-03-16",
+  "patenteCamion": "BCDF12",
+  "intento": 1,
+  "idCompra": 1,
+  "direccionCompra": "Av. Providencia 1234, Santiago",
+  "valorCompra": 45000,
+  "despachado": false
+}
+```
+
+**Response body — 201 Created**
+
+```json
+{
+  "idDespacho": 1,
+  "fechaDespacho": "2024-03-16",
+  "patenteCamion": "BCDF12",
+  "intento": 1,
+  "idCompra": 1,
+  "direccionCompra": "Av. Providencia 1234, Santiago",
+  "valorCompra": 45000,
+  "despachado": false
+}
+```
+
+| Status | Description |
+|--------|-------------|
+| `201 Created` | Dispatch created successfully. `Location` header contains the URI of the new resource. |
+
+<Note>
+  The `POST` endpoint does not enforce bean validation constraints. All fields are optional. Validation (`@Valid`) is only applied on `PUT` requests.
+</Note>
+
+---
+
+## GET /api/v1/despachos
+
+Returns a list of all dispatch records in the system.
+
+### Example
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url http://localhost:3002/api/v1/despachos
+```
+
+</CodeGroup>
+
+**Response body — 200 OK**
+
+```json
+[
+  {
+    "idDespacho": 1,
+    "fechaDespacho": "2024-03-16",
+    "patenteCamion": "BCDF12",
+    "intento": 1,
+    "idCompra": 1,
+    "direccionCompra": "Av. Providencia 1234, Santiago",
+    "valorCompra": 45000,
+    "despachado": false
+  },
+  {
+    "idDespacho": 2,
+    "fechaDespacho": "2024-03-17",
+    "patenteCamion": "XYZW99",
+    "intento": 2,
+    "idCompra": 2,
+    "direccionCompra": "Calle Falsa 456, Valparaíso",
+    "valorCompra": 28000,
+    "despachado": true
+  }
+]
+```
+
+| Status | Description |
+|--------|-------------|
+| `200 OK` | Returns an array of all dispatches. Returns an empty array when no records exist. |
+
+---
+
+## GET /api/v1/despachos/{idDespacho}
+
+Returns the details of a single dispatch record by its ID.
+
+### Path parameters
+
+<ParamField path="idDespacho" type="Long" required>
+  The unique identifier of the dispatch to retrieve.
+</ParamField>
+
+### Example
+
+<CodeGroup>
+
+```bash curl
+curl --request GET \
+  --url http://localhost:3002/api/v1/despachos/1
+```
+
+</CodeGroup>
+
+**Response body — 200 OK**
+
+```json
+{
+  "idDespacho": 1,
+  "fechaDespacho": "2024-03-16",
+  "patenteCamion": "BCDF12",
+  "intento": 1,
+  "idCompra": 1,
+  "direccionCompra": "Av. Providencia 1234, Santiago",
+  "valorCompra": 45000,
+  "despachado": false
+}
+```
+
+| Status | Description |
+|--------|-------------|
+| `200 OK` | Dispatch found and returned. |
+| `404 Not Found` | No dispatch exists with the given `idDespacho`. |
+
+---
+
+## PUT /api/v1/despachos/{idDespacho}
+
+Updates an existing dispatch record with new field values. All body fields are replaced with the provided values.
+
+### Path parameters
+
+<ParamField path="idDespacho" type="Long" required>
+  The unique identifier of the dispatch to update.
+</ParamField>
+
+### Body parameters
+
+<ParamField body="fechaDespacho" type="string">
+  Updated dispatch date in ISO-8601 format (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField body="patenteCamion" type="string">
+  Updated truck license plate.
+</ParamField>
+
+<ParamField body="intento" type="int">
+  Updated delivery attempt number.
+</ParamField>
+
+<ParamField body="idCompra" type="Long">
+  Updated sale ID reference.
+</ParamField>
+
+<ParamField body="direccionCompra" type="string">
+  Updated delivery address.
+</ParamField>
+
+<ParamField body="valorCompra" type="Long">
+  Updated purchase value.
+</ParamField>
+
+<ParamField body="despachado" type="boolean">
+  Updated delivery completion status.
+</ParamField>
+
+### Example
+
+<CodeGroup>
+
+```bash curl
+curl --request PUT \
+  --url http://localhost:3002/api/v1/despachos/1 \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "fechaDespacho": "2024-03-16",
+    "patenteCamion": "BCDF12",
+    "intento": 2,
+    "idCompra": 1,
+    "direccionCompra": "Av. Providencia 1234, Santiago",
+    "valorCompra": 45000,
+    "despachado": true
+  }'
+```
+
+</CodeGroup>
+
+**Request body**
+
+```json
+{
+  "fechaDespacho": "2024-03-16",
+  "patenteCamion": "BCDF12",
+  "intento": 2,
+  "idCompra": 1,
+  "direccionCompra": "Av. Providencia 1234, Santiago",
+  "valorCompra": 45000,
+  "despachado": true
+}
+```
+
+**Response body — 200 OK**
+
+```json
+{
+  "idDespacho": 1,
+  "fechaDespacho": "2024-03-16",
+  "patenteCamion": "BCDF12",
+  "intento": 2,
+  "idCompra": 1,
+  "direccionCompra": "Av. Providencia 1234, Santiago",
+  "valorCompra": 45000,
+  "despachado": true
+}
+```
+
+| Status | Description |
+|--------|-------------|
+| `200 OK` | Dispatch updated successfully. Returns the updated object. |
+| `400 Bad Request` | Validation failed on one or more fields. |
+| `404 Not Found` | No dispatch exists with the given `idDespacho`. |
+
+---
+
+## DELETE /api/v1/despachos/{idDespacho}
+
+Permanently deletes a dispatch record. Returns no body on success.
+
+### Path parameters
+
+<ParamField path="idDespacho" type="Long" required>
+  The unique identifier of the dispatch to delete.
+</ParamField>
+
+### Example
+
+<CodeGroup>
+
+```bash curl
+curl --request DELETE \
+  --url http://localhost:3002/api/v1/despachos/1
+```
+
+</CodeGroup>
+
+| Status | Description |
+|--------|-------------|
+| `204 No Content` | Dispatch deleted successfully. No response body. |
+| `404 Not Found` | No dispatch exists with the given `idDespacho`. |

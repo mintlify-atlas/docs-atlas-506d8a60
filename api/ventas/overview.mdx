@@ -1,0 +1,90 @@
+---
+title: 'Ventas REST API: base URL, data model, and error codes'
+description: 'Overview of the Ventas REST API: base URL, data model, available endpoints, and error handling for sales management in Innovatech Chile.'
+---
+
+The Ventas API is a Spring Boot REST service that manages sales records for the Innovatech Chile pet store. It exposes five CRUD endpoints under the `/api/v1/ventas` path and requires no authentication.
+
+## Base URL
+
+| Environment | Base URL |
+|-------------|----------|
+| Local       | `http://localhost:3001/api/v1/ventas` |
+| AWS         | `http://{ec2-app-ip}:3001/api/v1/ventas` |
+
+## Request format
+
+All requests and responses use JSON. Set the `Content-Type` header to `application/json` for requests that include a body.
+
+```
+Content-Type: application/json
+```
+
+CORS is open for all origins (`@CrossOrigin(origins = "*")`), so the API is accessible from any client without preflight restrictions.
+
+## Data model
+
+Each sale (`Venta`) contains the following fields.
+
+<ResponseField name="idVenta" type="Long">
+  Auto-generated unique identifier for the sale. Assigned by the database on creation.
+</ResponseField>
+
+<ResponseField name="direccionCompra" type="String" required>
+  Purchase and delivery address. Cannot be blank.
+</ResponseField>
+
+<ResponseField name="valorCompra" type="int">
+  Purchase value (amount) in the store's currency.
+</ResponseField>
+
+<ResponseField name="fechaCompra" type="LocalDate" required>
+  Purchase date in ISO-8601 format (`YYYY-MM-DD`). Cannot be null.
+</ResponseField>
+
+<ResponseField name="despachoGenerado" type="Boolean" required default="false">
+  Indicates whether a dispatch record has been generated for this sale. Defaults to `false`.
+</ResponseField>
+
+## Available endpoints
+
+See the [endpoints page](/api/ventas/endpoints) for full request/response details.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/ventas` | Create a new sale |
+| `GET` | `/api/v1/ventas` | List all sales |
+| `GET` | `/api/v1/ventas/{idVenta}` | Get a sale by ID |
+| `PUT` | `/api/v1/ventas/{idVenta}` | Update an existing sale |
+| `DELETE` | `/api/v1/ventas/{idVenta}` | Delete a sale |
+
+## Error handling
+
+<ResponseField name="status" type="HttpStatus">
+  HTTP status enum value (e.g. `NOT_FOUND`, `BAD_REQUEST`).
+</ResponseField>
+
+<ResponseField name="message" type="String">
+  Human-readable error message.
+</ResponseField>
+
+The API returns structured error responses for the following cases:
+
+| Condition | Status code | Description |
+|-----------|-------------|-------------|
+| Sale not found | `404 Not Found` | Thrown by `VentaNotFoundException` when the requested `idVenta` does not exist. |
+| Validation failure | `400 Bad Request` | Returned when required fields are missing or blank (e.g., `direccionCompra`, `fechaCompra`, `despachoGenerado`). |
+
+```json Example 404 response
+{
+  "status": "NOT_FOUND",
+  "message": "Venta no encontrada"
+}
+```
+
+```json Example 400 response
+{
+  "status": "BAD_REQUEST",
+  "message": "La dirección es obligatoria"
+}
+```

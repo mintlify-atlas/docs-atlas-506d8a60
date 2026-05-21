@@ -1,0 +1,118 @@
+---
+title: "Deploy Innovatech Chile to AWS EC2 instances and SSM"
+description: "Manual and automated deployment to three AWS EC2 instances using GitHub Actions and SSM for automatic deploys, or shell scripts for hands-on control."
+---
+
+Innovatech Chile runs across three EC2 instances in a private VPC. Deployments happen automatically on every push to `main` via the [GitHub Actions pipeline](/cicd/pipeline), or manually using the shell scripts in `proyect/remote-setup/`. This page covers both paths and explains how to SSH into private instances through the public bastion.
+
+## EC2 architecture
+
+| Instance | Tier | Network | Services |
+|---|---|---|---|
+| `ec2-web` | Web / Bastion | Public subnet — Elastic IP | `tienda-frontend` on port `80` |
+| `ec2-app` | Application | Private subnet | `tienda-backend` on port `3001`, `tienda-backend-despachos` on port `3002` |
+| `ec2-datos` | Data | Private subnet | MySQL database on port `3306` |
+
+`ec2-web` is the only instance with a public-facing Elastic IP. Use it as a bastion to reach the private instances.
+
+<Note>
+  Terraform prints the IP addresses of all instances as outputs. Run `terraform output` after provisioning to get the Elastic IP for `ec2-web` and the private IPs for `ec2-app` and `ec2-datos`.
+</Note>
+
+## Automatic deployment
+
+Pushing to `main` triggers the GitHub Actions workflow, which:
+
+1. Builds and pushes updated images to Amazon ECR.
+2. Sends SSM `RunShellScript` commands to `ec2-web` and `ec2-app` by their `Name` tag.
+3. Each instance pulls the latest image and restarts the container.
+
+No SSH access or open inbound ports are required for automated deployments. See the [pipeline page](/cicd/pipeline) for the full workflow file and secret configuration.
+
+## Manual deployment
+
+Use the manual path when you need to deploy without triggering a push, or when setting up an instance for the first time.
+
+### SSH access
+
+<Steps>
+  <Step title="Connect to ec2-web (bastion)">
+    Use the Elastic IP printed by `terraform output web_eip_public_ip`.
+
+    ```bash
+    ssh -i your-key.pem ec2-user@<ELASTIC_IP>
+    ```
+  </Step>
+  <Step title="Jump to ec2-app or ec2-datos">
+    From inside `ec2-web`, use the private IPs printed by `terraform output`.
+
+    ```bash
+    # Jump to the application layer
+    ssh -i your-key.pem ec2-user@<APP_PRIVATE_IP>
+
+    # Jump to the data layer
+    ssh -i your-key.pem ec2-user@<DATOS_PRIVATE_IP>
+    ```
+  </Step>
+</Steps>
+
+### SSM Session Manager (no SSH key required)
+
+If you have the AWS CLI and the Session Manager plugin installed, you can open a shell without any SSH key or open inbound port:
+
+```bash
+aws ssm start-session --target <INSTANCE_ID> --region us-east-1
+```
+
+### First-time instance setup
+
+Run `00-init.sh` once on each instance to install Docker before deploying any containers. See [deployment scripts reference](/cicd/scripts) for the full script content.
+
+```bash
+bash proyect/remote-setup/00-init.sh
+```
+
+After the script finishes, log out and back in so the `docker` group membership takes effect.
+
+### Deploy containers manually
+
+<Steps>
+  <Step title="Authenticate with ECR">
+    Set your AWS account ID and log Docker into the private registry.
+
+    ```bash
+    export AWS_ACCOUNT_ID=118812498736
+    aws ecr get-login-password --region us-east-1 \
+      | docker login --username AWS --password-stdin \
+        ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com
+    ```
+  </Step>
+  <Step title="Copy docker-compose.yml to the instance">
+    Place the Compose file in `/home/ec2-user/app/` — this is the working directory expected by `01-pull_and_deploy.sh`.
+
+    ```bash
+    scp -i your-key.pem proyect/docker-compose.yml \
+      ec2-user@<ELASTIC_IP>:/home/ec2-user/app/docker-compose.yml
+    ```
+  </Step>
+  <Step title="Set the AWS_ACCOUNT_ID environment variable">
+    The Compose file and deploy script reference this variable to construct ECR image URLs.
+
+    ```bash
+    export AWS_ACCOUNT_ID=118812498736
+    ```
+  </Step>
+  <Step title="Pull and start all containers">
+    Run `01-pull_and_deploy.sh` from inside the instance. The script authenticates with ECR, pulls the latest images, and starts the full stack.
+
+    ```bash
+    bash proyect/remote-setup/01-pull_and_deploy.sh
+    ```
+
+    This runs `docker compose pull` followed by `docker compose up -d --remove-orphans` in `/home/ec2-user/app/`.
+  </Step>
+</Steps>
+
+<Warning>
+  Make sure `docker-compose.yml` is present in `/home/ec2-user/app/` before running `01-pull_and_deploy.sh`. The script will exit with an error if that directory does not exist or the file is missing.
+</Warning>

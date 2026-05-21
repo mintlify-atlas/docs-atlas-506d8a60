@@ -1,0 +1,112 @@
+---
+title: 'Despachos REST API: data model, base URL, and errors'
+description: 'Overview of the Despachos REST API: base URL, data model, available endpoints, and error handling for dispatch management in Innovatech Chile.'
+---
+
+The Despachos API is a Spring Boot REST service that manages dispatch records for orders placed through the Innovatech Chile pet store. It exposes five CRUD endpoints under the `/api/v1/despachos` path and requires no authentication.
+
+## Base URL
+
+| Environment | Base URL |
+|-------------|----------|
+| Local       | `http://localhost:3002/api/v1/despachos` |
+| AWS         | `http://{ec2-app-ip}:3002/api/v1/despachos` |
+
+## Request format
+
+All requests and responses use JSON. Set the `Content-Type` header to `application/json` for requests that include a body.
+
+```
+Content-Type: application/json
+```
+
+CORS is open for all origins (`@CrossOrigin(origins = "*")`), so the API is accessible from any client without preflight restrictions.
+
+## Data model
+
+Each dispatch record (`Despacho`) contains the following fields.
+
+<ResponseField name="idDespacho" type="Long">
+  Auto-generated unique identifier for the dispatch. Assigned by the database on creation.
+</ResponseField>
+
+<ResponseField name="fechaDespacho" type="LocalDate">
+  Dispatch date in ISO-8601 format (`YYYY-MM-DD`).
+</ResponseField>
+
+<ResponseField name="patenteCamion" type="String">
+  Truck license plate assigned to carry out the delivery.
+</ResponseField>
+
+<ResponseField name="intento" type="int">
+  Delivery attempt number. Increments on each failed delivery attempt.
+</ResponseField>
+
+<ResponseField name="idCompra" type="Long">
+  Reference to the associated sale (`Venta`) ID. Links this dispatch to its originating sale record.
+</ResponseField>
+
+<ResponseField name="direccionCompra" type="String">
+  Delivery address copied from the associated sale at dispatch creation time.
+</ResponseField>
+
+<ResponseField name="valorCompra" type="Long">
+  Purchase value copied from the associated sale at dispatch creation time.
+</ResponseField>
+
+<ResponseField name="despachado" type="boolean" default="false">
+  Indicates whether the delivery was completed. Defaults to `false`.
+</ResponseField>
+
+## Available endpoints
+
+See the [endpoints page](/api/despachos/endpoints) for full request/response details.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/despachos` | Create a new dispatch |
+| `GET` | `/api/v1/despachos` | List all dispatches |
+| `GET` | `/api/v1/despachos/{idDespacho}` | Get a dispatch by ID |
+| `PUT` | `/api/v1/despachos/{idDespacho}` | Update an existing dispatch |
+| `DELETE` | `/api/v1/despachos/{idDespacho}` | Delete a dispatch |
+
+## Error handling
+
+<ResponseField name="status" type="HttpStatus">
+  HTTP status enum value (e.g. `NOT_FOUND`, `BAD_REQUEST`).
+</ResponseField>
+
+<ResponseField name="message" type="String">
+  Human-readable error message.
+</ResponseField>
+
+<ResponseField name="errors" type="object">
+  Map of field names to error messages. Present on 404 responses and validation errors.
+</ResponseField>
+
+The API returns structured error responses for the following cases:
+
+| Condition | Status code | Description |
+|-----------|-------------|-------------|
+| Dispatch not found | `404 Not Found` | Thrown by `DespachoNotFoundException` when the requested `idDespacho` does not exist. |
+| Validation failure | `400 Bad Request` | Returned when required fields fail validation constraints. |
+
+```json Example 404 response
+{
+  "status": "NOT_FOUND",
+  "message": "Despacho no encontrado",
+  "errors": {
+    "idDespacho": "ID de despacho no existe"
+  }
+}
+```
+
+```json Example 400 response
+{
+  "status": "BAD_REQUEST",
+  "message": "Error de validación",
+  "errors": {
+    "fieldName": "validation error message"
+  }
+}
+```

@@ -1,0 +1,67 @@
+---
+title: "Innovatech Chile: containerized pet store platform"
+description: "Innovatech Chile runs two Spring Boot APIs, a React frontend, and MySQL on AWS — orchestrated with Docker Compose and deployed via GitHub Actions CI/CD."
+---
+
+Innovatech Chile — Tienda de Perritos is a containerized microservices platform that powers an online pet store. The system consists of two Spring Boot REST APIs (Sales and Dispatch), a React/Vite frontend, a MySQL database, and a full AWS infrastructure managed via Terraform and deployed automatically through GitHub Actions CI/CD.
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/getting-started/prerequisites">
+    Get the platform running locally with Docker Compose in minutes
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Understand the 3-tier microservices architecture and AWS deployment
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/ventas/overview">
+    Explore the REST endpoints for Sales and Dispatch services
+  </Card>
+  <Card title="CI/CD Pipeline" icon="arrows-rotate" href="/cicd/pipeline">
+    Learn how GitHub Actions builds and deploys to AWS ECR and EC2
+  </Card>
+</CardGroup>
+
+## What's included
+
+The platform is composed of four main services orchestrated with Docker Compose:
+
+<CardGroup cols={2}>
+  <Card title="Ventas API" icon="cart-shopping" href="/services/ventas-api">
+    Spring Boot REST API on port 3001 — manages sales records including purchase address, value, date, and dispatch status
+  </Card>
+  <Card title="Despachos API" icon="truck" href="/services/despachos-api">
+    Spring Boot REST API on port 3002 — manages dispatch records with truck plate, delivery attempts, and delivery status
+  </Card>
+  <Card title="Frontend" icon="browser" href="/services/frontend">
+    React + Vite application served by NGINX on port 80 — admin dashboard for managing sales and dispatches
+  </Card>
+  <Card title="Infrastructure" icon="server" href="/infrastructure/terraform">
+    Terraform-provisioned AWS VPC with 3-tier architecture across two availability zones in us-east-1
+  </Card>
+</CardGroup>
+
+## Getting started
+
+<Steps>
+  <Step title="Install prerequisites">
+    Make sure you have Docker, Docker Compose, and Git installed on your machine. See the [prerequisites page](/getting-started/prerequisites) for version requirements.
+  </Step>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/DevOpsDuoc/Evaluacion02_Devop_Innovatech.git
+    cd Evaluacion02_Devop_Innovatech/proyect
+    ```
+  </Step>
+  <Step title="Start all services">
+    ```bash
+    export AWS_ACCOUNT_ID=your-account-id
+    docker compose up -d
+    ```
+  </Step>
+  <Step title="Access the application">
+    Open your browser at `http://localhost` to access the frontend. The Ventas API is available at `http://localhost:3001` and the Despachos API at `http://localhost:3002`.
+  </Step>
+</Steps>
+
+<Note>
+  For production deployment on AWS, see the [Terraform infrastructure guide](/infrastructure/terraform) and the [CI/CD pipeline documentation](/cicd/pipeline).
+</Note>

@@ -1,0 +1,114 @@
+---
+title: "Amazon ECR: private container image registry setup"
+description: "Three private ECR repositories store Docker images for each service. CI/CD builds and pushes on every merge to main; EC2 instances pull at deploy time."
+---
+
+Amazon Elastic Container Registry (ECR) is the private Docker image registry for Innovatech Chile. The CI/CD pipeline builds images from the multi-stage Dockerfiles and pushes them to ECR on every merge to `main`. At deploy time, EC2 instances authenticate with ECR and pull the latest images before starting containers.
+
+## Repositories
+
+Three private ECR repositories store one image each:
+
+| Repository name | Service | Port |
+|---|---|---|
+| `tienda-frontend` | React/NGINX frontend | 80 |
+| `tienda-backend` | Spring Boot Ventas API | 3001 |
+| `tienda-backend-despachos` | Spring Boot Despachos API | 3002 |
+
+All images use the `latest` tag. The full image URI pattern is:
+
+```
+{AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/{repository}:latest
+```
+
+## Authenticating with ECR
+
+ECR uses short-lived tokens issued by the AWS CLI. Run the following command to authenticate your local Docker daemon before pulling or pushing:
+
+```bash
+aws ecr get-login-password --region us-east-1 \
+  | docker login --username AWS --password-stdin \
+    ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com
+```
+
+The deployment script on `ec2-web` runs this same command using the instance's IAM role credentials (no static keys required):
+
+```bash 01-pull_and_deploy.sh
+aws ecr get-login-password --region us-east-1 \
+  | docker login --username AWS \
+    --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com
+```
+
+<Note>
+  The `LabRole` IAM role attached to all EC2 instances includes ECR read permissions (`ecr:GetAuthorizationToken`, `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`). No additional IAM configuration is required.
+</Note>
+
+## Pulling images with Docker Compose
+
+`docker-compose.yml` reads `AWS_ACCOUNT_ID` from the environment to build the full ECR image URI for each service:
+
+```yaml docker-compose.yml
+services:
+  backend:
+    image: ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/tienda-backend:latest
+
+  backend-despachos:
+    image: ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/tienda-backend-despachos:latest
+
+  frontend:
+    image: ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/tienda-frontend:latest
+```
+
+After authenticating, pull all images and start the stack:
+
+```bash
+export AWS_ACCOUNT_ID=118812498736
+docker compose pull
+docker compose up -d --remove-orphans
+```
+
+## IAM permissions
+
+All EC2 instances use the pre-existing `LabRole` IAM role via the `LabRoleProfile-*` instance profile provisioned by Terraform. This role grants the permissions required to:
+
+- Retrieve an ECR authorization token (`ecr:GetAuthorizationToken`)
+- Pull image layers from any repository in the account (`ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer`)
+- Use SSM Session Manager for remote command execution without opening SSH ports
+
+<Warning>
+  AWS Academy lab sessions expire after a set period. When a session expires the temporary credentials attached to `LabRole` rotate. Re-authenticate with ECR after starting a new lab session.
+</Warning>
+
+## How the CI/CD pipeline pushes images
+
+The GitHub Actions workflow builds and pushes all three images to ECR on every push to `main`, then triggers rolling container updates on the EC2 instances via SSM. See the [CI/CD pipeline documentation](/cicd/pipeline) for the full workflow.
+
+The build and push steps in the workflow follow this pattern for each service:
+
+```yaml deploy.yml
+- name: Build and Push Frontend
+  run: |
+    docker build \
+      -t ${{ env.ECR_REGISTRY }}/${{ env.REPO_FRONTEND }}:latest \
+      -f proyect/frontend/Dockerfile \
+      ./proyect/frontend
+    docker push ${{ env.ECR_REGISTRY }}/${{ env.REPO_FRONTEND }}:latest
+
+- name: Build and Push Backend
+  run: |
+    docker build \
+      -t ${{ env.ECR_REGISTRY }}/${{ env.REPO_BACKEND }}:latest \
+      -f proyect/backend/Dockerfile \
+      ./proyect/backend
+    docker push ${{ env.ECR_REGISTRY }}/${{ env.REPO_BACKEND }}:latest
+
+- name: Build and Push Backend Despachos
+  run: |
+    docker build \
+      -t ${{ env.ECR_REGISTRY }}/${{ env.REPO_DESPACHOS }}:latest \
+      -f proyect/backend-despachos/Dockerfile \
+      ./proyect/backend-despachos
+    docker push ${{ env.ECR_REGISTRY }}/${{ env.REPO_DESPACHOS }}:latest
+```
+
+After all images are pushed, the `deploy-by-ssm` job sends shell commands to `ec2-web` and `ec2-app` via AWS SSM to pull the new images and restart the containers.

@@ -1,0 +1,186 @@
+---
+title: "Docker: containerization strategy and named volumes"
+description: "Multi-stage Dockerfiles for each service, Docker Compose orchestration for all four containers, and why a named volume is used for MySQL persistence."
+---
+
+Every service in the Innovatech Chile platform is packaged as a Docker image using a multi-stage build. The build stage produces the artifact (a compiled JAR or a static asset bundle) and a lean runtime stage carries only the minimum needed to run it. Docker Compose ties all four services together and manages startup order, port bindings, and environment variables.
+
+## Containerization strategy
+
+- **Backend services** (Ventas and Despachos) are built with Maven inside a `maven:3.9.9` container, then the compiled JAR is copied into an `eclipse-temurin:17-jre` runtime image. A non-root user `appuser` runs the process.
+- **Frontend** is compiled with `node:20-alpine` using `npm ci` and `npm run build`, then the `dist/` folder is served by `nginx:stable-alpine` at runtime.
+- **Orchestration** is handled by a single `docker-compose.yml` in the `proyect/` root that starts the frontend, both backends, and the MySQL database.
+- **MySQL data** is persisted in a named Docker volume (`tienda_db_data`) so the database survives container recreation.
+
+## Dockerfiles
+
+<CodeGroup>
+
+```dockerfile backend (Ventas) — port 3001
+FROM maven:3.9.9 AS builder
+WORKDIR /app
+
+COPY pom.xml .
+COPY src ./src
+
+RUN mvn -B -DskipTests package
+
+FROM eclipse-temurin:17-jre AS runtime
+WORKDIR /app
+
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+
+COPY --chown=appuser:appgroup --from=builder /app/target/*.jar /app/app.jar
+
+USER appuser
+
+EXPOSE 3001
+ENV JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+```
+
+```dockerfile backend (Despachos) — port 3002
+FROM maven:3.9.9 AS builder
+WORKDIR /app
+
+COPY pom.xml .
+COPY src ./src
+RUN mvn -B -DskipTests package
+
+FROM eclipse-temurin:17-jre AS runtime
+WORKDIR /app
+
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+
+COPY --chown=appuser:appgroup --from=builder /app/target/*.jar /app/app.jar
+
+USER appuser
+
+EXPOSE 3002
+ENV JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+```
+
+```dockerfile frontend — port 80
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+FROM nginx:stable-alpine AS runtime
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+</CodeGroup>
+
+<Note>
+  The `JAVA_TOOL_OPTIONS` flag `-XX:+UseContainerSupport` enables JVM container-aware memory sizing. `-XX:MaxRAMPercentage=75.0` caps heap usage at 75% of the memory limit the container sees, preventing OOM kills.
+</Note>
+
+## Docker Compose
+
+All services are declared in `proyect/docker-compose.yml`. The `image` field for each service points to an ECR repository so that the same file works for both local builds and production pulls.
+
+```yaml docker-compose.yml
+services:
+  backend:
+    build:
+      context: ./back-Ventas_SpringBoot/Springboot-API-REST
+    image: ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/tienda-backend:latest
+    ports:
+      - "3001:3001"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/tienda
+      SPRING_DATASOURCE_USERNAME: tienda
+      SPRING_DATASOURCE_PASSWORD: tienda123
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    depends_on:
+      - db
+
+  backend-despachos:
+    image: ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/tienda-backend-despachos:latest
+    restart: always
+    ports:
+      - "3002:3002"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/tienda
+      SPRING_DATASOURCE_USERNAME: tienda
+      SPRING_DATASOURCE_PASSWORD: tienda123
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./front_despacho
+    image: ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/tienda-frontend:latest
+    ports:
+      - "80:80"
+    environment:
+      VITE_API_BASE_URL: http://backend:3001
+      VITE_API_DESPACHOS_URL: http://backend-despachos:3002
+    depends_on:
+      - backend
+      - backend-despachos
+
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: tienda
+      MYSQL_USER: tienda
+      MYSQL_PASSWORD: tienda123
+    ports:
+      - "3306:3306"
+    volumes:
+      - tienda_db_data:/var/lib/mysql
+
+volumes:
+  tienda_db_data:
+    name: tienda_db_data
+```
+
+### Service dependencies
+
+```
+db
+├── backend       (depends_on: db)
+├── backend-despachos (depends_on: db)
+└── frontend      (depends_on: backend, backend-despachos)
+```
+
+Compose starts `db` first, then the two backend services, and finally the frontend.
+
+## Named volume: why not a bind mount
+
+The MySQL data directory is mounted via the named volume `tienda_db_data` rather than a bind mount. The rationale from the project documentation:
+
+| Concern | Named volume | Bind mount |
+|---|---|---|
+| **Isolation and security** | No host paths or file-system dependencies exposed | Exposes host directory paths, prone to permission errors |
+| **Portability** | Managed by Docker, movable between compatible hosts | Tied to a specific host directory path |
+| **Data integrity** | Persists when containers are recreated or updated | Can be affected by host-side file changes |
+| **Performance** | Docker optimises I/O for supported storage engines | Subject to host file-system latency variability |
+| **Coupling** | Keeps the backend stateless and independent | Creates a dependency on local host paths |
+
+<Note>
+  Named volumes are the recommended approach for production database persistence. Containers remain ephemeral while the volume outlives any individual container lifecycle.
+</Note>
+
+The volume is declared at the top level of `docker-compose.yml` with an explicit name so it is predictable and easy to reference in backup or migration scripts:
+
+```yaml docker-compose.yml
+volumes:
+  tienda_db_data:
+    name: tienda_db_data
+```

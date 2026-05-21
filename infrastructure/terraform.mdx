@@ -1,0 +1,354 @@
+---
+title: "Terraform: provision the AWS VPC and EC2 instances"
+description: "Terraform scripts that provision a 3-tier AWS VPC across two availability zones in us-east-1, with six subnets and one EC2 instance per network tier."
+---
+
+The Terraform configuration provisions the entire AWS network and compute foundation for Innovatech Chile. It creates a 3-tier VPC with six subnets spread across two availability zones, attaches the required gateways, and launches three EC2 instances — one per tier — each protected by a chained security group architecture.
+
+## Provider configuration
+
+The project requires Terraform 1.0 or later and uses the AWS provider pinned to the `~> 5.0` range. Authentication relies on environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`) that AWS Academy injects at session start.
+
+```hcl 00-versions.tf
+terraform {
+  required_version = ">= 1.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = "us-east-1"
+}
+```
+
+## Network: VPC and subnets
+
+The VPC uses the `10.0.0.0/20` CIDR block (4,096 addresses) with DNS support and DNS hostnames enabled. Six `/24` subnets are distributed across `us-east-1a` and `us-east-1b` in three tiers.
+
+```hcl 01-network.tf
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/20"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags = {
+    Name = "academy-vpc"
+  }
+}
+
+locals {
+  azs = ["us-east-1a", "us-east-1b"]
+}
+```
+
+### Subnet layout
+
+| Tier | Subnet | CIDR | AZ |
+|---|---|---|---|
+| Public (web) | `public-subnet-1` | `10.0.0.0/24` | `us-east-1a` |
+| Public (web) | `public-subnet-2` | `10.0.1.0/24` | `us-east-1b` |
+| Private (app) | `private-app-subnet-1` | `10.0.2.0/24` | `us-east-1a` |
+| Private (app) | `private-app-subnet-2` | `10.0.3.0/24` | `us-east-1b` |
+| Private (data) | `private-data-subnet-1` | `10.0.4.0/24` | `us-east-1a` |
+| Private (data) | `private-data-subnet-2` | `10.0.5.0/24` | `us-east-1b` |
+
+Public subnets have `map_public_ip_on_launch = true`. App and data subnets have no direct internet access.
+
+## Gateways and routing
+
+An Internet Gateway (`academy-igw`) handles inbound and outbound internet traffic for the public subnets. A NAT Gateway (`academy-nat`) allows private instances to reach the internet for outbound requests without exposing them to inbound connections.
+
+```hcl 01-network.tf
+resource "aws_internet_gateway" "igw" {
+  vpc_id = aws_vpc.main.id
+  tags   = { Name = "academy-igw" }
+}
+
+resource "aws_eip" "nat_eip" {
+  domain = "vpc"
+}
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat_eip.id
+  subnet_id     = aws_subnet.public[0].id
+  tags          = { Name = "academy-nat" }
+  depends_on    = [aws_internet_gateway.igw]
+}
+```
+
+Two route tables govern traffic flow:
+
+- **Public route table** — `0.0.0.0/0` → Internet Gateway; associated with both public subnets.
+- **Private route table** — `0.0.0.0/0` → NAT Gateway; associated with all four private subnets.
+
+### S3 VPC endpoint
+
+A Gateway-type VPC endpoint routes S3 traffic directly inside the AWS network, bypassing the NAT Gateway and eliminating per-GB NAT charges for S3 access.
+
+```hcl 01-network.tf
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = aws_vpc.main.id
+  vpc_endpoint_type = "Gateway"
+  service_name      = "com.amazonaws.us-east-1.s3"
+  route_table_ids = [
+    aws_route_table.public_rt.id,
+    aws_route_table.private_rt.id
+  ]
+  tags = { Name = "s3-gateway-endpoint" }
+}
+```
+
+<Note>
+  The S3 endpoint automatically adds routes to the associated route tables. No extra configuration is required after `terraform apply`.
+</Note>
+
+## Security groups
+
+Traffic flows in one direction through three chained security groups: `sg_web` → `sg_app` → `sg_datos`. Each inner layer only accepts connections from the layer above it.
+
+<CodeGroup>
+
+```hcl sg_web (web layer)
+resource "aws_security_group" "sg_web" {
+  name        = "web-sg"
+  description = "Allow HTTP and SSH from internet"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description = "SSH access from anywhere"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTP access from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "ICMP for connectivity testing (ping)"
+    from_port   = -1
+    to_port     = -1
+    protocol    = "icmp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+```
+
+```hcl sg_app (app layer)
+resource "aws_security_group" "sg_app" {
+  name        = "app-sg"
+  description = "Allow traffic from web-sg and Spring Boot ports 3001/3002"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description     = "SSH access restricted to Web Layer"
+    from_port       = 22
+    to_port         = 22
+    protocol        = "tcp"
+    security_groups = [aws_security_group.sg_web.id]
+  }
+
+  ingress {
+    description     = "Spring Boot Ventas API access from Web Layer"
+    from_port       = 3001
+    to_port         = 3001
+    protocol        = "tcp"
+    security_groups = [aws_security_group.sg_web.id]
+  }
+
+  ingress {
+    description     = "Spring Boot Despachos API access from Web Layer"
+    from_port       = 3002
+    to_port         = 3002
+    protocol        = "tcp"
+    security_groups = [aws_security_group.sg_web.id]
+  }
+
+  ingress {
+    description     = "ICMP from Web Layer"
+    from_port       = -1
+    to_port         = -1
+    protocol        = "icmp"
+    security_groups = [aws_security_group.sg_web.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+```
+
+```hcl sg_datos (data layer)
+resource "aws_security_group" "sg_datos" {
+  name        = "datos-sg"
+  description = "Allow traffic from app-sg and management from web-sg"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description     = "Database Port (MySQL) restricted to App Layer"
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
+    security_groups = [aws_security_group.sg_app.id]
+  }
+
+  ingress {
+    description     = "SSH access restricted to Web Layer (Bastion)"
+    from_port       = 22
+    to_port         = 22
+    protocol        = "tcp"
+    security_groups = [aws_security_group.sg_web.id]
+  }
+
+  ingress {
+    description     = "ICMP from App Layer"
+    from_port       = -1
+    to_port         = -1
+    protocol        = "icmp"
+    security_groups = [aws_security_group.sg_app.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+```
+
+</CodeGroup>
+
+<Warning>
+  `sg_datos` allows SSH on port 22 from `sg_web` so that `ec2-web` can act as a bastion for Ansible management of the data instance. MySQL port 3306 is only reachable from `sg_app`.
+</Warning>
+
+## EC2 instances
+
+All three instances use the latest Amazon Linux 2023 AMI (`al2023-ami-*-x86_64`) and the `t3.micro` instance type. The IAM instance profile wraps the pre-existing `LabRole`, granting SSM Session Manager access without opening extra inbound ports.
+
+```hcl 02-compute.tf
+data "aws_iam_role" "lab_role" {
+  name = "LabRole"
+}
+
+resource "aws_iam_instance_profile" "lab_profile" {
+  name_prefix = "LabRoleProfile-"
+  role        = data.aws_iam_role.lab_role.name
+}
+```
+
+| Instance | Subnet | Security group | Public IP |
+|---|---|---|---|
+| `ec2-web` | `public-subnet-1` | `sg_web` | Elastic IP |
+| `ec2-app` | `private-app-subnet-1` | `sg_app` | None |
+| `ec2-datos` | `private-data-subnet-1` | `sg_datos` | None |
+
+`ec2-web` receives a dedicated Elastic IP that persists across instance stops and starts:
+
+```hcl 02-compute.tf
+resource "aws_eip" "web_eip" {
+  instance   = aws_instance.ec2_web.id
+  domain     = "vpc"
+  depends_on = [aws_internet_gateway.igw]
+}
+```
+
+## Variables
+
+```hcl variables.tf
+variable "key_name" {
+  description = "The name of the SSH key pair provided by AWS Academy"
+  type        = string
+  default     = ""
+}
+```
+
+Set `key_name` to the name of the key pair created in your AWS Academy lab session before running `terraform apply`.
+
+## Outputs
+
+After a successful apply, Terraform prints four values needed for Ansible inventory and SSH jump configuration:
+
+```hcl 03-outputs.tf
+output "web_eip_public_ip" {
+  description = "Stable public Elastic IP of the Web/Bastion instance"
+  value       = aws_eip.web_eip.public_ip
+}
+
+output "web_instance_private_ip" {
+  description = "The private IP of the Web instance"
+  value       = aws_instance.ec2_web.private_ip
+}
+
+output "app_instance_private_ip" {
+  description = "The private IP of the Application instance (Use this for SSH jump from Web)"
+  value       = aws_instance.ec2_app.private_ip
+}
+
+output "datos_instance_private_ip" {
+  description = "The private IP of the Data instance (Use this for SSH jump from App)"
+  value       = aws_instance.ec2_datos.private_ip
+}
+```
+
+## Applying the configuration
+
+<Steps>
+  <Step title="Export AWS credentials">
+    Set the environment variables provided by your AWS Academy lab session:
+
+    ```bash
+    export AWS_ACCESS_KEY_ID=...
+    export AWS_SECRET_ACCESS_KEY=...
+    export AWS_SESSION_TOKEN=...
+    ```
+  </Step>
+  <Step title="Set the key pair name">
+    Pass the SSH key pair name created in your lab:
+
+    ```bash
+    export TF_VAR_key_name=vockey
+    ```
+  </Step>
+  <Step title="Initialize Terraform">
+    Download the AWS provider plugin:
+
+    ```bash
+    terraform init
+    ```
+  </Step>
+  <Step title="Preview the plan">
+    Review all resources before creating them:
+
+    ```bash
+    terraform plan
+    ```
+  </Step>
+  <Step title="Apply the configuration">
+    Create the infrastructure and note the output IPs:
+
+    ```bash
+    terraform apply
+    ```
+  </Step>
+</Steps>

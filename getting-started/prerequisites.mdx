@@ -1,0 +1,62 @@
+---
+title: "Prerequisites for Innovatech Chile local development"
+description: "Docker with Compose plugin and Git are required to run Innovatech Chile locally. AWS CLI and Java 17 are only needed for production or non-Docker workflows."
+---
+
+Before you run the Innovatech Chile platform, make sure your machine has the required tools. The full stack runs inside Docker, so Docker and Git are the only hard requirements for local development. The AWS CLI is required for production deployment. Java and Node.js are only needed if you want to build services outside of Docker.
+
+## Required tools
+
+<CardGroup cols={2}>
+  <Card title="Docker with Compose plugin" icon="docker">
+    Runs all four services (frontend, Ventas API, Despachos API, and MySQL) in isolated containers. The Docker Compose plugin (`docker compose`) is included with Docker Desktop and with Docker Engine ≥ 23 on Linux.
+  </Card>
+  <Card title="Git" icon="code-branch">
+    Used to clone the repository. Any recent version works.
+  </Card>
+  <Card title="AWS CLI" icon="aws">
+    Required for production deployment only. Used to authenticate with Amazon ECR and push container images. Install version 2 from the [AWS documentation](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html).
+  </Card>
+</CardGroup>
+
+## Optional tools
+
+These tools are only needed if you want to build or develop services **outside** of Docker.
+
+<CardGroup cols={2}>
+  <Card title="Java 17 JRE and Maven" icon="java">
+    The backend Dockerfile uses `eclipse-temurin:17-jre` at runtime and `maven:3.9.9` to build. You need a local Java 17 JRE and Maven only if you run `mvn package` directly on your machine.
+  </Card>
+  <Card title="Node.js 20" icon="node-js">
+    The frontend Dockerfile uses `node:20-alpine` to compile the Vite/React app. You need Node.js 20 locally only if you run `npm ci` and `npm run build` outside of Docker.
+  </Card>
+</CardGroup>
+
+## Environment variables
+
+Set the following environment variable before running `docker compose`. It is referenced in `docker-compose.yml` to tag and pull container images from Amazon ECR.
+
+| Variable | Required | Description |
+|---|---|---|
+| `AWS_ACCOUNT_ID` | Yes | Your 12-digit AWS account ID. Used to construct ECR image URIs, for example `${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/tienda-backend:latest`. |
+
+<Tabs>
+  <Tab title="macOS / Linux">
+    ```bash
+    export AWS_ACCOUNT_ID=123456789012
+    ```
+
+    To persist the value across sessions, add the line to your `~/.bashrc`, `~/.zshrc`, or equivalent shell profile.
+  </Tab>
+  <Tab title="Windows (PowerShell)">
+    ```powershell
+    $env:AWS_ACCOUNT_ID = "123456789012"
+    ```
+
+    To set it permanently, use **System Properties → Environment Variables** or the `[System.Environment]::SetEnvironmentVariable` cmdlet.
+  </Tab>
+</Tabs>
+
+<Note>
+  `AWS_ACCOUNT_ID` must be set even for local development because `docker-compose.yml` uses it to name the images that are built and stored locally.
+</Note>

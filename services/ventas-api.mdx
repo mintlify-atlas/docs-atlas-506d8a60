@@ -1,0 +1,152 @@
+---
+title: "Ventas API: Spring Boot sales microservice on port 3001"
+description: "Spring Boot microservice on port 3001 that manages sales records for Tienda de Perritos, backed by MySQL and documented with Springdoc OpenAPI."
+---
+
+The Ventas API is a Spring Boot REST microservice that handles all sales (ventas) operations for the Tienda de Perritos platform. It exposes a JSON API under `api/v1/ventas`, persists data to a shared MySQL database via JPA/Hibernate, and publishes interactive API docs at `/swagger-ui.html` through Springdoc OpenAPI.
+
+<CardGroup cols={2}>
+  <Card title="REST endpoints" icon="code" href="/api/ventas/endpoints">
+    Full endpoint reference with request and response schemas
+  </Card>
+  <Card title="Docker setup" icon="docker" href="/infrastructure/docker">
+    How all services are orchestrated with Docker Compose
+  </Card>
+</CardGroup>
+
+## Overview
+
+<CardGroup cols={2}>
+  <Card title="Port" icon="network-wired">
+    `3001`
+  </Card>
+  <Card title="Base path" icon="route">
+    `api/v1/ventas`
+  </Card>
+  <Card title="Framework" icon="leaf">
+    Spring Boot + JPA/Hibernate
+  </Card>
+  <Card title="Database" icon="database">
+    MySQL 8.0 (shared `tienda` schema)
+  </Card>
+</CardGroup>
+
+## The `Venta` entity
+
+Each sale record maps to a single `Venta` row in MySQL. The table is created or updated automatically by Hibernate at startup based on `SPRING_JPA_HIBERNATE_DDL_AUTO`.
+
+```java Venta.java
+@Entity
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@Builder
+public class Venta {
+    @Id
+    @GeneratedValue(strategy = GenerationType.AUTO)
+    private Long idVenta;
+
+    @NotBlank(message = "La dirección es obligatoria")
+    private String direccionCompra;
+
+    private int valorCompra;
+
+    @NotNull(message = "Fecha de compra es obligatoria")
+    @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+    private LocalDate fechaCompra;
+
+    @NotNull(message = "El campo de despacho debe ser proporcionado")
+    private Boolean despachoGenerado = false;
+}
+```
+
+| Field | Type | Constraints | Notes |
+|---|---|---|---|
+| `idVenta` | `Long` | Auto-generated PK | `GenerationType.AUTO` |
+| `direccionCompra` | `String` | `@NotBlank` | Purchase delivery address |
+| `valorCompra` | `int` | — | Purchase amount |
+| `fechaCompra` | `LocalDate` | `@NotNull`, ISO date | Format: `YYYY-MM-DD` |
+| `despachoGenerado` | `Boolean` | `@NotNull`, default `false` | Set to `true` once a dispatch is created |
+
+## REST endpoints
+
+All endpoints are served at `http://localhost:3001/api/v1/ventas`. The controller uses `@CrossOrigin(origins = "*")` so the frontend can reach it from any origin.
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/ventas` | Create a new sale |
+| `GET` | `/api/v1/ventas` | List all sales |
+| `GET` | `/api/v1/ventas/{idVenta}` | Get a single sale by ID |
+| `PUT` | `/api/v1/ventas/{idVenta}` | Update an existing sale |
+| `DELETE` | `/api/v1/ventas/{idVenta}` | Delete a sale |
+
+See the [API Reference](/api/ventas/endpoints) for full request/response schemas and the interactive Swagger playground.
+
+<Note>
+  `POST` and `PUT` requests require a valid `Content-Type: application/json` header and must include all `@NotBlank` / `@NotNull` fields. Validation errors return `400 Bad Request`.
+</Note>
+
+## Docker build
+
+The Ventas API uses a two-stage Docker build to keep the runtime image small. Maven compiles the JAR in the builder stage; the final image contains only the JRE.
+
+```dockerfile Dockerfile
+# Stage 1 — compile
+FROM maven:3.9.9 AS builder
+WORKDIR /app
+COPY pom.xml .
+COPY src ./src
+RUN mvn -B -DskipTests package
+
+# Stage 2 — runtime
+FROM eclipse-temurin:17-jre AS runtime
+WORKDIR /app
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+COPY --chown=appuser:appgroup --from=builder /app/target/*.jar /app/app.jar
+USER appuser
+EXPOSE 3001
+ENV JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+```
+
+<Steps>
+  <Step title="Builder stage">
+    `maven:3.9.9` downloads dependencies and runs `mvn -B -DskipTests package`, producing a fat JAR under `target/`.
+  </Step>
+  <Step title="Runtime stage">
+    `eclipse-temurin:17-jre` provides a minimal JRE. A dedicated non-root `appuser` is created and the JAR is copied with correct ownership.
+  </Step>
+  <Step title="JVM tuning">
+    `JAVA_TOOL_OPTIONS` enables container-aware memory limits and caps heap at 75 % of the container's available RAM.
+  </Step>
+</Steps>
+
+## Environment variables
+
+These variables are set in `docker-compose.yml` and must be present at runtime. Spring Boot maps them directly to `application.properties` keys via its relaxed binding.
+
+| Variable | Example value | Description |
+|---|---|---|
+| `SPRING_DATASOURCE_URL` | `jdbc:mysql://db:3306/tienda` | JDBC connection string for the MySQL database |
+| `SPRING_DATASOURCE_USERNAME` | `tienda` | Database username |
+| `SPRING_DATASOURCE_PASSWORD` | `tienda123` | Database password |
+| `SPRING_JPA_HIBERNATE_DDL_AUTO` | `update` | Hibernate schema strategy (`update`, `create`, `validate`, or `none`) |
+
+```yaml docker-compose.yml (backend service)
+backend:
+  build:
+    context: ./back-Ventas_SpringBoot/Springboot-API-REST
+  ports:
+    - "3001:3001"
+  environment:
+    SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/tienda
+    SPRING_DATASOURCE_USERNAME: tienda
+    SPRING_DATASOURCE_PASSWORD: tienda123
+    SPRING_JPA_HIBERNATE_DDL_AUTO: update
+  depends_on:
+    - db
+```
+
+<Warning>
+  Do not use `SPRING_JPA_HIBERNATE_DDL_AUTO: create` or `create-drop` in production — these options drop and recreate tables on every startup, destroying existing data.
+</Warning>

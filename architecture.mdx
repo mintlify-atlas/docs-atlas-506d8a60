@@ -1,0 +1,145 @@
+---
+title: "Microservices system architecture and service topology"
+description: "Overview of the 3-tier microservices architecture: four Docker Compose services, AWS VPC subnet layout, security group chaining, and data flow."
+---
+
+Innovatech Chile runs four services wired together by Docker Compose for local development and mirrored on AWS as a 3-tier VPC for production. Understanding how the layers connect — frontend to APIs to database — and how security groups enforce that boundary on AWS is the foundation for working with any part of this platform.
+
+## Services overview
+
+<CardGroup cols={2}>
+  <Card title="Ventas API" icon="cart-shopping">
+    Spring Boot REST service on **port 3001**. Manages sales records. Connects to MySQL at `db:3306` via JDBC. Docker service name: `backend`.
+  </Card>
+  <Card title="Despachos API" icon="truck">
+    Spring Boot REST service on **port 3002**. Manages dispatch records. Connects to the same MySQL instance at `db:3306`. Docker service name: `backend-despachos`.
+  </Card>
+  <Card title="Frontend" icon="browser">
+    React + Vite application served by NGINX on **port 80**. Calls the two backend APIs using the environment variables `VITE_API_BASE_URL` and `VITE_API_DESPACHOS_URL`.
+  </Card>
+  <Card title="MySQL DB" icon="database">
+    MySQL 8.0 on **port 3306**. Database name `tienda`, user `tienda`. Data is persisted in the named volume `tienda_db_data`.
+  </Card>
+</CardGroup>
+
+## Docker Compose orchestration
+
+Docker Compose declares all four services and their dependency order in `docker-compose.yml`. Both backend services must be healthy before the frontend starts, and both backends declare an explicit `depends_on: db`.
+
+```yaml docker-compose.yml
+services:
+  backend:
+    build:
+      context: ./back-Ventas_SpringBoot/Springboot-API-REST
+    image: ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/tienda-backend:latest
+    ports:
+      - "3001:3001"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/tienda
+      SPRING_DATASOURCE_USERNAME: tienda
+      SPRING_DATASOURCE_PASSWORD: tienda123
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    depends_on:
+      - db
+
+  backend-despachos:
+    image: ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/tienda-backend-despachos:latest
+    restart: always
+    ports:
+      - "3002:3002"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/tienda
+      SPRING_DATASOURCE_USERNAME: tienda
+      SPRING_DATASOURCE_PASSWORD: tienda123
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./front_despacho
+    image: ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/tienda-frontend:latest
+    ports:
+      - "80:80"
+    environment:
+      VITE_API_BASE_URL: http://backend:3001
+      VITE_API_DESPACHOS_URL: http://backend-despachos:3002
+    depends_on:
+      - backend
+      - backend-despachos
+
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: tienda
+      MYSQL_USER: tienda
+      MYSQL_PASSWORD: tienda123
+    ports:
+      - "3306:3306"
+    volumes:
+      - tienda_db_data:/var/lib/mysql
+
+volumes:
+  tienda_db_data:
+    name: tienda_db_data
+```
+
+<Note>
+  On AWS, the `${AWS_ACCOUNT_ID}` variable is resolved at deploy time. The CI/CD pipeline injects this value when pulling images from ECR before running `docker compose up -d`.
+</Note>
+
+## AWS 3-tier VPC architecture
+
+The production environment mirrors the same three-layer separation using a dedicated VPC (`academy-vpc`, CIDR `10.0.0.0/20`) across two availability zones (`us-east-1a`, `us-east-1b`).
+
+| Tier | Subnet resource | CIDR range | EC2 instance | Internet access |
+|---|---|---|---|---|
+| Web (public) | `aws_subnet.public` | `10.0.0.0/24`, `10.0.1.0/24` | `ec2-web` | Direct via IGW |
+| App (private) | `aws_subnet.private_app` | `10.0.2.0/24`, `10.0.3.0/24` | `ec2-app` | Outbound via NAT |
+| Data (private) | `aws_subnet.private_data` | `10.0.4.0/24`, `10.0.5.0/24` | `ec2-datos` | Outbound via NAT |
+
+The public subnets route `0.0.0.0/0` to the Internet Gateway (`academy-igw`). Both private subnet tiers share a private route table that routes outbound traffic through the NAT Gateway, which is deployed in the first public subnet. An S3 Gateway Endpoint is also attached so that S3 traffic bypasses the NAT Gateway entirely.
+
+## Security group chaining
+
+Each EC2 tier has its own security group. Ingress rules reference the upstream group by ID rather than by CIDR, so traffic can only flow in the permitted direction: `sg_web` → `sg_app` → `sg_datos`.
+
+```
+Internet
+   │  HTTP :80, SSH :22
+   ▼
+sg_web  (ec2-web — public subnet)
+   │  ports :3001, :3002, SSH :22 from sg_web
+   ▼
+sg_app  (ec2-app — private app subnet)
+   │  MySQL :3306 from sg_app, SSH :22 from sg_web
+   ▼
+sg_datos  (ec2-datos — private data subnet)
+```
+
+- **`sg_web`** allows inbound HTTP (80), SSH (22), and ICMP from `0.0.0.0/0`.
+- **`sg_app`** allows inbound on ports 3001 and 3002 (Spring Boot), SSH, and ICMP — all restricted to `sg_web` as the source.
+- **`sg_datos`** allows inbound MySQL (3306) from `sg_app` and SSH from `sg_web` (for Ansible management). ICMP is permitted from `sg_app`.
+
+<Info>
+  All three security groups allow unrestricted outbound traffic (`0.0.0.0/0`). Outbound from the private tiers leaves through the NAT Gateway.
+</Info>
+
+## End-to-end data flow
+
+<Steps>
+  <Step title="Browser request arrives at ec2-web">
+    A user opens the application in their browser. The request reaches `ec2-web` in the public subnet on port 80. `sg_web` permits this inbound HTTP traffic.
+  </Step>
+  <Step title="Frontend calls the backend APIs">
+    The React frontend makes HTTP requests to the Ventas API on port 3001 and the Despachos API on port 3002. In Docker Compose, these are resolved by service name (`backend`, `backend-despachos`). On AWS, the frontend on `ec2-web` calls `ec2-app`; `sg_app` permits these ports only from `sg_web`.
+  </Step>
+  <Step title="Backend APIs query MySQL">
+    Both Spring Boot services connect to MySQL using the JDBC URL `jdbc:mysql://db:3306/tienda` (Docker) or the private IP of `ec2-datos` (AWS). `sg_datos` permits port 3306 exclusively from `sg_app`.
+  </Step>
+  <Step title="Response travels back up the chain">
+    MySQL returns query results to the backend, the backend returns JSON to the frontend, and the frontend renders the response in the browser. No layer can initiate a connection to a higher layer.
+  </Step>
+</Steps>

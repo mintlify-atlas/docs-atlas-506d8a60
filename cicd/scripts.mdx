@@ -1,0 +1,184 @@
+---
+title: "Remote setup and deployment scripts reference guide"
+description: "Reference for the four shell scripts in remote-setup/ that install Docker, pull ECR images, and deploy Innovatech Chile containers to EC2 instances."
+---
+
+The `proyect/remote-setup/` directory contains four shell scripts covering the full deployment lifecycle — from first-time Docker installation to Ansible-based cluster deployment. The scripts are designed to be run in order on a fresh Amazon Linux 2 EC2 instance, though each can also be used independently.
+
+<AccordionGroup>
+  <Accordion title="00-init.sh — install Docker on EC2">
+    Run this script once on each EC2 instance before any containers are deployed. It installs Docker via `yum`, enables the systemd service so Docker starts on reboot, adds `ec2-user` to the `docker` group so you can run Docker commands without `sudo`, and creates the `~/app` directory used by the deploy script.
+
+    After the script completes, log out and reconnect for the group membership change to take effect.
+
+    ```bash proyect/remote-setup/00-init.sh
+    #!/bin/bash
+    # remote-setup/00-init.sh
+
+    echo "=== Actualizando sistema e instalando Docker ==="
+    sudo yum update -y
+    sudo yum install docker -y
+
+    echo "=== Habilitando y arrancando el servicio de Docker ==="
+    sudo systemctl start docker
+    sudo systemctl enable docker
+
+    echo "=== Añadiendo al usuario ec2-user al grupo Docker ==="
+    sudo usermod -aG docker ec2-user
+
+    echo "=== Creando directorio para la aplicación ==="
+    mkdir -p $HOME/app
+
+    echo "¡Instancia lista! Por favor, cierra sesión y vuelve a entrar para aplicar cambios de grupo."
+    ```
+  </Accordion>
+
+  <Accordion title="01-pull_and_deploy.sh — pull images and start services">
+    This is the main deploy script used by both the manual deployment process and the GitHub Actions pipeline (indirectly, via SSM commands). It authenticates Docker with Amazon ECR using the instance's IAM role credentials, changes into `/home/ec2-user/app/`, pulls the latest images defined in `docker-compose.yml`, and restarts the full stack.
+
+    The `AWS_ACCOUNT_ID` environment variable must be set before running this script.
+
+    ```bash proyect/remote-setup/01-pull_and_deploy.sh
+    #!/bin/bash
+    # Script de automatización de despliegue continuo para Innovatech Chile
+
+    echo "==============================================="
+    echo "Iniciando proceso de despliegue en AWS EC2"
+    echo "==============================================="
+
+    # 1. Autenticar Docker con Amazon ECR usando las credenciales del rol de la instancia
+    echo "Autenticando con Amazon ECR..."
+    aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com
+
+    # 2. Asegurar el directorio de la aplicación
+    cd /home/ec2-user/app || exit 1
+
+    # 3. Descargar las imágenes más recientes desde el registro privado
+    echo "Descargando últimas imágenes optimizadas..."
+    docker compose pull
+
+    # 4. Reiniciar el stack completo de contenedores en segundo plano (Ventas, Despachos, Frontend y Base de datos)
+    echo "Levantando servicios de la Tienda de Perritos..."
+    docker compose up -d --remove-orphans
+
+    echo "==============================================="
+    echo "Despliegue completado con éxito"
+    echo "==============================================="
+    ```
+
+    <Note>
+      The `--remove-orphans` flag removes containers for services that are no longer defined in `docker-compose.yml`, keeping the running stack in sync with the Compose file.
+    </Note>
+  </Accordion>
+
+  <Accordion title="02-deployments.sh — manual per-instance deployment (earlier approach)">
+    This script documents the original manual deployment approach used before Docker Compose and ECR were adopted. It builds images locally and runs individual containers on separate EC2 hosts — one for the database (`ec2-datos`), one for the backend (`ec2-app`), and one for the frontend (`ec2-web`).
+
+    Before running the backend section, set `DB_HOST_IP` to the private IP of the `ec2-datos` instance so the backend container can reach the database.
+
+    <Warning>
+      This script builds images from local source code. It is not compatible with the ECR-based workflow. Use `01-pull_and_deploy.sh` for standard deployments.
+    </Warning>
+
+    ```bash proyect/remote-setup/02-deployments.sh
+    #!/bin/bash
+
+    # connect to ec2-data
+
+    # deploying database
+    cd $HOME/project/db
+
+    docker build -t tienda-db .
+
+    docker run \
+        --rm \
+        --detach \
+        --name tienda-db \
+        --publish 3306:3306 \
+        --volume dbdata:/var/lib/mysql \
+        tienda-db
+
+    # connect to ec2-backend
+
+    # deploying backend
+    cd $HOME/project/backend
+
+    export DB_HOST_IP=10.0.4.XXX
+
+    docker build -t tienda-backend .
+
+    docker run \
+        --rm \
+        --detach \
+        --name tienda-backend \
+        --publish 3001:3001 \
+        --env DB_HOST=$DB_HOST_IP \
+        --env DB_USER=root \
+        --env DB_PASSWORD=admin123 \
+        --env DB_NAME=tienda_perritos \
+        --env DB_PORT=3306 \
+        tienda-backend
+
+    # on ec2-web (the Bastion)
+
+    # deploying frontend
+    cd $HOME/project/frontend
+
+    ## MODIFY THE IP ON default.conf WITH BACKEND IP
+    vi default.conf
+
+    docker build -t tienda-frontend .
+
+    docker run \
+        --rm \
+        --detach \
+        --name tienda-frontend \
+        --publish 80:80 \
+        tienda-frontend
+    ```
+  </Accordion>
+
+  <Accordion title="03-deploy_into_cluster.sh — Ansible-based cluster deployment">
+    This script outlines an Ansible-based deployment alternative for deploying containers across the cluster. It installs the `community.docker` Ansible Galaxy collection and then runs an `ansible-playbook` command using an `inventory.ini` file and a `deploy_apps.yml` playbook.
+
+    The `deploy_apps.yml` playbook and `inventory.ini` files are not included in the repository and must be created separately before running this script.
+
+    ```bash proyect/remote-setup/03-deploy_into_cluster.sh
+    #!/bin/bash
+
+    # how to deploy individual containers in separate servers
+
+    # install ansible docker
+    ansible-galaxy collection install community.docker
+
+    # create and copy deploy_apps.yml
+    vi deploy_apps.yml
+    ansible-playbook -i inventory.ini deploy_apps.yml
+    ```
+
+    <Note>
+      You need Ansible installed on the control machine before running this script. The `community.docker` collection provides Docker modules for managing containers, images, and networks through Ansible tasks.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## Script execution order
+
+For a fresh EC2 instance, run the scripts in numeric order:
+
+<Steps>
+  <Step title="Run 00-init.sh">
+    Install Docker and create the application directory. Log out and back in after this step.
+  </Step>
+  <Step title="Place docker-compose.yml in ~/app">
+    Copy the Compose file to `/home/ec2-user/app/` before the next step.
+  </Step>
+  <Step title="Set AWS_ACCOUNT_ID">
+    ```bash
+    export AWS_ACCOUNT_ID=118812498736
+    ```
+  </Step>
+  <Step title="Run 01-pull_and_deploy.sh">
+    Authenticate with ECR, pull images, and start all containers.
+  </Step>
+</Steps>

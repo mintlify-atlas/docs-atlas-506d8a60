@@ -1,0 +1,152 @@
+---
+title: "Despachos API: Spring Boot dispatch microservice port 3002"
+description: "Spring Boot microservice on port 3002 that manages dispatch records for Tienda de Perritos, linked to sales via idCompra and documented with Springdoc OpenAPI."
+---
+
+The Despachos API is a Spring Boot REST microservice that manages all dispatch (despacho) operations for the Tienda de Perritos platform. It exposes a JSON API under `api/v1/despachos`, links every dispatch to a sale through the `idCompra` foreign key, and publishes interactive docs at `/swagger-ui.html` through Springdoc OpenAPI.
+
+<CardGroup cols={2}>
+  <Card title="REST endpoints" icon="code" href="/api/despachos/endpoints">
+    Full endpoint reference with request and response schemas
+  </Card>
+  <Card title="Ventas API" icon="cart-shopping" href="/services/ventas-api">
+    The sales service that dispatch records reference via idCompra
+  </Card>
+</CardGroup>
+
+## Overview
+
+<CardGroup cols={2}>
+  <Card title="Port" icon="network-wired">
+    `3002`
+  </Card>
+  <Card title="Base path" icon="route">
+    `api/v1/despachos`
+  </Card>
+  <Card title="Framework" icon="leaf">
+    Spring Boot + JPA/Hibernate
+  </Card>
+  <Card title="Database" icon="database">
+    MySQL 8.0 (shared `tienda` schema)
+  </Card>
+</CardGroup>
+
+## The `Despacho` entity
+
+Each dispatch record maps to a single `Despacho` row in MySQL. The `idCompra` field acts as a soft foreign key referencing the `idVenta` of a sale in the Ventas API.
+
+```java Despacho.java
+@Entity
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class Despacho {
+    @Id
+    @GeneratedValue(strategy = GenerationType.AUTO)
+    private Long idDespacho;
+
+    @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+    private LocalDate fechaDespacho;
+
+    private String patenteCamion;
+    private int intento;
+    private Long idCompra;
+    private String direccionCompra;
+    private Long valorCompra;
+    private boolean despachado = false;
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `idDespacho` | `Long` | Auto-generated PK |
+| `fechaDespacho` | `LocalDate` | Dispatch date, ISO format `YYYY-MM-DD` |
+| `patenteCamion` | `String` | Truck license plate |
+| `intento` | `int` | Delivery attempt number (1, 2, 3…) |
+| `idCompra` | `Long` | References `idVenta` in the Ventas API |
+| `direccionCompra` | `String` | Delivery address copied from the sale |
+| `valorCompra` | `Long` | Purchase value copied from the sale |
+| `despachado` | `boolean` | `true` once the item is delivered, default `false` |
+
+## REST endpoints
+
+All endpoints are served at `http://localhost:3002/api/v1/despachos`. The controller uses `@CrossOrigin(origins = "*")` to allow cross-origin requests from the React frontend.
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/despachos` | Create a new dispatch record |
+| `GET` | `/api/v1/despachos` | List all dispatch records |
+| `GET` | `/api/v1/despachos/{idDespacho}` | Get a single dispatch by ID |
+| `PUT` | `/api/v1/despachos/{idDespacho}` | Update an existing dispatch |
+| `DELETE` | `/api/v1/despachos/{idDespacho}` | Delete a dispatch record |
+
+See the [API Reference](/api/despachos/endpoints) for full request/response schemas and the interactive Swagger playground.
+
+<Note>
+  `PUT` requests require `@Valid` on the request body. A `404 Not Found` is returned when the given `idDespacho` does not exist (thrown as `DespachoNotFoundException`).
+</Note>
+
+## Docker build
+
+The Despachos API uses the same two-stage Maven → JRE build pattern as the Ventas API.
+
+```dockerfile Dockerfile
+# Stage 1 — compile
+FROM maven:3.9.9 AS builder
+WORKDIR /app
+COPY pom.xml .
+COPY src ./src
+RUN mvn -B -DskipTests package
+
+# Stage 2 — runtime
+FROM eclipse-temurin:17-jre AS runtime
+WORKDIR /app
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser
+COPY --chown=appuser:appgroup --from=builder /app/target/*.jar /app/app.jar
+USER appuser
+EXPOSE 3002
+ENV JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+```
+
+<Steps>
+  <Step title="Builder stage">
+    `maven:3.9.9` resolves dependencies and runs `mvn -B -DskipTests package`, producing a fat JAR under `target/`.
+  </Step>
+  <Step title="Runtime stage">
+    `eclipse-temurin:17-jre` provides a minimal JRE. A dedicated non-root `appuser` owns the JAR file.
+  </Step>
+  <Step title="JVM tuning">
+    `JAVA_TOOL_OPTIONS` enables container-aware memory limits and restricts heap to 75 % of the container's available RAM.
+  </Step>
+</Steps>
+
+## Environment variables
+
+These variables are injected by Docker Compose at runtime. Spring Boot maps them to the corresponding `application.properties` keys via relaxed binding.
+
+| Variable | Example value | Description |
+|---|---|---|
+| `SPRING_DATASOURCE_URL` | `jdbc:mysql://db:3306/tienda` | JDBC connection string for the MySQL database |
+| `SPRING_DATASOURCE_USERNAME` | `tienda` | Database username |
+| `SPRING_DATASOURCE_PASSWORD` | `tienda123` | Database password |
+| `SPRING_JPA_HIBERNATE_DDL_AUTO` | `update` | Hibernate schema strategy (`update`, `create`, `validate`, or `none`) |
+
+```yaml docker-compose.yml (backend-despachos service)
+backend-despachos:
+  image: ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/tienda-backend-despachos:latest
+  restart: always
+  ports:
+    - "3002:3002"
+  environment:
+    SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/tienda
+    SPRING_DATASOURCE_USERNAME: tienda
+    SPRING_DATASOURCE_PASSWORD: tienda123
+    SPRING_JPA_HIBERNATE_DDL_AUTO: update
+  depends_on:
+    - db
+```
+
+<Warning>
+  Do not use `SPRING_JPA_HIBERNATE_DDL_AUTO: create` or `create-drop` in production — these options drop and recreate tables on every startup, destroying existing data.
+</Warning>
